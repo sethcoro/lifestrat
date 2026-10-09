@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { FEEDBACK_URL, sendFeedback, track } from './analytics';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { sendFeedback } from './analytics';
 
 type Props = { fg: string; bg: string; font?: string; ctx: Record<string, unknown> };
 
@@ -25,9 +25,6 @@ export default function Feedback({ fg, bg, font, ctx }: Props) {
     return (
       <View style={[s.box, { borderColor: fg }]}>
         <Text style={[s.body, t]}>Thanks. That helps.</Text>
-        <Text style={[s.link, t]} onPress={() => { track('feedback_link_tap'); Linking.openURL(FEEDBACK_URL).catch(() => {}); }}>
-          Got more to say? Give longer feedback
-        </Text>
       </View>
     );
   }
@@ -60,9 +57,6 @@ export default function Feedback({ fg, bg, font, ctx }: Props) {
       <Pressable onPress={submit} style={[s.send, { backgroundColor: fg, borderColor: fg }]}>
         <Text style={[s.sendText, { color: bg, fontFamily: font }]}>{state === 'sending' ? 'SENDING...' : 'SEND FEEDBACK'}</Text>
       </Pressable>
-      <Text style={[s.link, t]} onPress={() => { track('feedback_link_tap'); Linking.openURL(FEEDBACK_URL).catch(() => {}); }}>
-        Have more to say? Give longer feedback
-      </Text>
       <Text style={[s.small, t]}>Your rating and note are sent as written. No name or account.</Text>
     </View>
   );

@@ -5,7 +5,6 @@ import { Platform } from 'react-native';
 // are only queued on the device and logged in dev.
 const URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 const KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
-export const FEEDBACK_URL = process.env.EXPO_PUBLIC_FEEDBACK_URL ?? 'https://forms.gle/REPLACE_ME';
 export const APP_VERSION = '0.1.0';
 
 export type EventType =
@@ -17,8 +16,7 @@ export type EventType =
   | 'run_end'
   | 'run_abandon'
   | 'settings_change'
-  | 'report_tap'
-  | 'feedback_link_tap';
+  | 'report_tap';
 
 type Ev = {
   anon_id: string;
