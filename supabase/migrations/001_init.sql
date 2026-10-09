@@ -121,3 +121,19 @@ select
 from public.feedback f
 group by 1
 order by 1;
+
+-- ---------------------------------------------------------------------------
+-- Lock down the views: they must not be readable through the public API.
+-- ---------------------------------------------------------------------------
+alter view public.runs           set (security_invoker = on);
+alter view public.funnel         set (security_invoker = on);
+alter view public.choice_split   set (security_invoker = on);
+alter view public.drop_off       set (security_invoker = on);
+alter view public.retention      set (security_invoker = on);
+alter view public.rating_summary set (security_invoker = on);
+
+revoke all on public.runs, public.funnel, public.choice_split, public.drop_off,
+              public.retention, public.rating_summary from anon, authenticated;
+revoke all on public.events, public.feedback from anon, authenticated;
+grant insert on public.events, public.feedback to anon;
+grant usage on sequence public.events_id_seq, public.feedback_id_seq to anon;
