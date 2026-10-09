@@ -1,5 +1,7 @@
 import { ReactElement, useEffect, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Feedback from './src/Feedback';
+import { getConsent, init as initAnalytics, newRun, setConsent, track } from './src/analytics';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -13,7 +15,7 @@ const DETAILS: Detail[] = ['Quick', 'Detailed'];
 const DIFFS: Difficulty[] = ['Easy', 'Medium', 'Hard'];
 const KEYS: StatKey[] = ['satisfaction', 'health', 'relationships', 'seniority', 'influence', 'netWorth'];
 
-type Screen = 'start' | 'play' | 'ending' | 'settings';
+type Screen = 'consent' | 'start' | 'play' | 'ending' | 'settings';
 type Entry = { kind: 'pick' | 'note' | 'result' | 'sit'; text: string };
 
 function useColors(dark: boolean) {
@@ -36,14 +38,49 @@ export default function App() {
   const scroller = useRef<ScrollView>(null);
   const c = useColors(dark);
 
+  const [analyticsOn, setAnalyticsOn] = useState(false);
+  const decisionStart = useRef(Date.now());
+  const pos = useRef({ screen: 'start' as Screen, ep: 0, part: 'A' as 'A' | 'B', title: '' });
+
   useEffect(() => {
     AsyncStorage.getItem('dark').then((v) => v && setDark(v === '1')).catch(() => {});
+    initAnalytics().then(() => {
+      const consent = getConsent();
+      setAnalyticsOn(consent === true);
+      if (consent === null) setScreen('consent');
+      track('app_open');
+    });
+  }, []);
+
+  // Keep a ref of where the player is, so leaving mid-run can be recorded.
+  pos.current = { screen, ep: epIdx, part, title: eps[epIdx]?.title ?? '' };
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st !== 'active' && pos.current.screen === 'play') {
+        track('run_abandon', { episode: pos.current.ep + 1, part: pos.current.part, title: pos.current.title });
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   const toggleDark = () => {
     const next = !dark;
     setDark(next);
     AsyncStorage.setItem('dark', next ? '1' : '0').catch(() => {});
+    track('settings_change', { setting: 'dark', value: next });
+  };
+
+  const chooseConsent = async (on: boolean) => {
+    await setConsent(on);
+    setAnalyticsOn(on);
+    setScreen('start');
+  };
+
+  const toggleAnalytics = async () => {
+    const next = !analyticsOn;
+    if (!next) track('settings_change', { setting: 'analytics', value: false });
+    await setConsent(next);
+    setAnalyticsOn(next);
   };
 
   const currentPart = (): Part => {
@@ -59,13 +96,26 @@ export default function App() {
     setStats(START_STATS);
     setThread([{ kind: 'sit', text: list[0].partA.situation }]);
     setScreen('play');
+    newRun();
+    track('run_start', { age, detail, difficulty: diff, episodes: list.length });
+    decisionStart.current = Date.now();
   };
 
   const pick = (which: 'a' | 'b') => {
     const ep = eps[epIdx];
     const p = currentPart();
     const opt: Option = p[which];
-    setStats((s) => applyFx(s, opt.fx, diff));
+    const nextStats = applyFx(stats, opt.fx, diff);
+    setStats(nextStats);
+    track('choice', {
+      episode: epIdx + 1, title: ep.title, part, option: which, text: opt.text,
+      ms: Date.now() - decisionStart.current, stats: nextStats,
+    });
+    decisionStart.current = Date.now();
+    if (part === 'B') {
+      track('episode_result', { episode: epIdx + 1, title: ep.title, first: firstPick, second: which });
+      if (epIdx + 1 >= eps.length) track('run_end', { stats: nextStats, episodes: eps.length });
+    }
     const entries: Entry[] = [
       { kind: 'pick', text: opt.text },
       { kind: 'note', text: opt.note },
@@ -111,7 +161,7 @@ export default function App() {
         <View key={k} style={styles.meterRow}>
           <Text style={[styles.small, { color: c.fg, width: 84 }]}>{STAT_LABELS[k]}</Text>
           {k === 'netWorth' ? (
-            <Text style={[styles.small, { color: c.fg }]}>${stats.netWorth.toLocaleString()}</Text>
+            <Text style={[styles.small, { color: c.fg }]}>{stats.netWorth < 0 ? '-' : ''}${Math.abs(stats.netWorth).toLocaleString()}</Text>
           ) : (
             <View style={[styles.track, { borderColor: c.fg }]}>
               <View style={{ width: `${stats[k]}%`, height: '100%', backgroundColor: c.fg }} />
@@ -131,7 +181,22 @@ export default function App() {
 
   let body: ReactElement;
 
-  if (screen === 'start') {
+  if (screen === 'consent') {
+    body = (
+      <ScrollView contentContainerStyle={styles.pad}>
+        <Text style={[styles.title, { color: c.fg }]}>LIFESTRAT</Text>
+        <Text style={[styles.body, { color: c.fg, marginTop: 16 }]}>
+          This is a beta. Can we record how you play: the choices you make, where you stop, and your final stats?
+        </Text>
+        <Text style={[styles.body, { color: c.fg, marginTop: 12 }]}>
+          It is anonymous. No name, no account, no free text. It shows how people play a game, not how they live. You can turn it off any time in settings.
+        </Text>
+        <View style={{ height: 24 }} />
+        <Btn label="YES, SHARE" solid onPress={() => chooseConsent(true)} />
+        <Btn label="NO THANKS" onPress={() => chooseConsent(false)} />
+      </ScrollView>
+    );
+  } else if (screen === 'start') {
     body = (
       <ScrollView contentContainerStyle={styles.pad}>
         <Header left="" right="settings" />
@@ -175,7 +240,10 @@ export default function App() {
           <Btn label={`B. ${p.b.text}`} onPress={() => pick('b')} />
           <Text
             style={[styles.small, { color: c.fg, textAlign: 'right', textDecorationLine: 'underline' }]}
-            onPress={() => Alert.alert('Report', 'Thanks. In the real app this sends the text to us for review.')}
+            onPress={() => {
+              track('report_tap', { episode: epIdx + 1, part });
+              Alert.alert('Report', 'Thanks. In the real app this sends the text to us for review.');
+            }}
           >
             report
           </Text>
@@ -194,6 +262,7 @@ export default function App() {
           <Meters />
           <Text style={[styles.body, { color: c.fg, marginTop: 14 }]}>"{end.epitaph}"</Text>
         </View>
+        <Feedback fg={c.fg} bg={c.bg} font={FONT} ctx={{ age, detail, difficulty: diff, stats }} />
         <View style={{ height: 20 }} />
         <Btn label="PLAY AGAIN" solid onPress={() => setScreen('start')} />
       </ScrollView>
@@ -204,6 +273,7 @@ export default function App() {
         <Header left="SETTINGS" right="close" />
         <View style={{ height: 8 }} />
         <Btn label={dark ? 'Dark mode: on' : 'Dark mode: off'} onPress={toggleDark} />
+        <Btn label={analyticsOn ? 'Share anonymous play data: on' : 'Share anonymous play data: off'} onPress={toggleAnalytics} />
         <Btn label="Restore purchases" onPress={() => Alert.alert('Restore purchases', 'Not connected yet.')} />
         <Btn label="Privacy policy" onPress={() => Alert.alert('Privacy policy', 'A link goes here before launch.')} />
         <Btn label="Contact support" onPress={() => Alert.alert('Support', 'An email address goes here before launch.')} />
