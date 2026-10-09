@@ -1,0 +1,15 @@
+[build]
+  base = "app"
+  command = "npx expo export --platform web"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Public by design: this key can only insert rows (see supabase/migrations).
+  EXPO_PUBLIC_SUPABASE_URL = "https://hipqocuidusgbbwaygot.supabase.co"
+  EXPO_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpcHFvY3VpZHVzZ2Jid2F5Z290Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1MjAwNTEsImV4cCI6MjEwNzA5NjA1MX0.7Q2dmCvyPUxIMuhCnUyjynVEn4_pYRGwHXNH98DFoOE"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex"
