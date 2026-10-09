@@ -1,22 +1,28 @@
 import { ReactElement, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
-import Feedback from './src/Feedback';
-import { getConsent, init as initAnalytics, newRun, setConsent, track } from './src/analytics';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Feedback from './src/Feedback';
+import { getConsent, init as initAnalytics, newRun, setConsent, track } from './src/analytics';
 import {
-  Detail, Difficulty, Episode, Option, Part, START_STATS, STAT_LABELS, StatKey, Stats,
-  applyFx, endingText, episodesFor,
+  Detail, Difficulty, Episode, SITUATIONS, START_AGES, STAT_LABELS, Situation, StatKey, Stats, Step,
+  applyFx, buildEpisodes, debrief, endingText, fmtMoney, startStats,
 } from './src/engine';
 
 const FONT = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' });
-const AGES = [8, 14, 18, 22];
 const DETAILS: Detail[] = ['Quick', 'Detailed'];
 const DIFFS: Difficulty[] = ['Easy', 'Medium', 'Hard'];
 const KEYS: StatKey[] = ['satisfaction', 'health', 'relationships', 'seniority', 'influence', 'netWorth'];
+const LETTERS = 'ABCDEFGHIJ';
+const DIFF_NOTE: Record<Difficulty, string> = {
+  Easy: 'Setbacks are halved. Situations show hints.',
+  Medium: 'A realistic mix, with some luck in the money.',
+  Hard: 'Setbacks hit 50% harder, luck swings more, and situations add a complication.',
+};
 
+type Mode = 'life' | 'sit';
 type Screen = 'consent' | 'start' | 'play' | 'ending' | 'settings';
-type Entry = { kind: 'pick' | 'note' | 'result' | 'sit'; text: string };
+type Entry = { kind: 'pick' | 'note' | 'result' | 'sit' | 'twist'; text: string };
 
 function useColors(dark: boolean) {
   return dark ? { bg: '#000', fg: '#fff' } : { bg: '#fff', fg: '#000' };
@@ -26,21 +32,25 @@ export default function App() {
   const [dark, setDark] = useState(false);
   const [screen, setScreen] = useState<Screen>('start');
   const [back, setBack] = useState<Screen>('start');
+  const [mode, setMode] = useState<Mode>('life');
   const [age, setAge] = useState(18);
   const [detail, setDetail] = useState<Detail>('Quick');
   const [diff, setDiff] = useState<Difficulty>('Medium');
+  const [sitPick, setSitPick] = useState<string>('random');
   const [eps, setEps] = useState<Episode[]>([]);
+  const [sit, setSit] = useState<Situation | null>(null);
   const [epIdx, setEpIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
   const [part, setPart] = useState<'A' | 'B'>('A');
-  const [firstPick, setFirstPick] = useState<'a' | 'b'>('a');
-  const [stats, setStats] = useState<Stats>(START_STATS);
+  const [firstPick, setFirstPick] = useState(0);
+  const [stats, setStats] = useState<Stats>(startStats(18));
   const [thread, setThread] = useState<Entry[]>([]);
-  const scroller = useRef<ScrollView>(null);
-  const c = useColors(dark);
-
   const [analyticsOn, setAnalyticsOn] = useState(false);
+  const scroller = useRef<ScrollView>(null);
   const decisionStart = useRef(Date.now());
-  const pos = useRef({ screen: 'start' as Screen, ep: 0, part: 'A' as 'A' | 'B', title: '' });
+  const startRef = useRef<Stats>(startStats(18));
+  const pos = useRef({ screen: 'start' as Screen, label: '', part: '' });
+  const c = useColors(dark);
 
   useEffect(() => {
     AsyncStorage.getItem('dark').then((v) => v && setDark(v === '1')).catch(() => {});
@@ -52,12 +62,15 @@ export default function App() {
     });
   }, []);
 
-  // Keep a ref of where the player is, so leaving mid-run can be recorded.
-  pos.current = { screen, ep: epIdx, part, title: eps[epIdx]?.title ?? '' };
+  pos.current = {
+    screen,
+    label: mode === 'sit' ? sit?.title ?? '' : eps[epIdx]?.title ?? '',
+    part: mode === 'sit' ? String(stepIdx + 1) : `${epIdx + 1}${part}`,
+  };
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (st) => {
-      if (st !== 'active' && pos.current.screen === 'play') {
-        track('run_abandon', { episode: pos.current.ep + 1, part: pos.current.part, title: pos.current.title });
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s !== 'active' && pos.current.screen === 'play') {
+        track('run_abandon', { scenario: pos.current.label, at: pos.current.part });
       }
     });
     return () => sub.remove();
@@ -83,57 +96,86 @@ export default function App() {
     setAnalyticsOn(next);
   };
 
-  const currentPart = (): Part => {
+  const currentStep = (): Step => {
+    if (mode === 'sit' && sit) return sit.steps[stepIdx];
     const ep = eps[epIdx];
-    return part === 'A' ? ep.partA : ep.partB[firstPick];
+    return part === 'A' ? ep.a : ep.b[firstPick];
   };
 
   const begin = () => {
-    const list = episodesFor(detail, age);
-    setEps(list);
-    setEpIdx(0);
-    setPart('A');
-    setStats(START_STATS);
-    setThread([{ kind: 'sit', text: list[0].partA.situation }]);
+    let base: Stats;
+    let firstText: string;
+    let scenario: string;
+    if (mode === 'sit') {
+      const chosen = sitPick === 'random' ? SITUATIONS[Math.floor(Math.random() * SITUATIONS.length)] : SITUATIONS.find((s) => s.id === sitPick)!;
+      base = { ...startStats(30), ...chosen.start };
+      setSit(chosen);
+      setStepIdx(0);
+      firstText = chosen.steps[0].situation;
+      scenario = chosen.title;
+    } else {
+      const list = buildEpisodes(detail, age);
+      base = startStats(age);
+      setEps(list);
+      setEpIdx(0);
+      setPart('A');
+      firstText = list[0].a.situation;
+      scenario = list[0].title;
+    }
+    startRef.current = base;
+    setStats(base);
+    setThread([{ kind: 'sit', text: firstText }]);
     setScreen('play');
     newRun();
-    track('run_start', { age, detail, difficulty: diff, episodes: list.length });
+    track('run_start', { mode, age: mode === 'life' ? age : null, detail: mode === 'life' ? detail : null, difficulty: diff, scenario });
     decisionStart.current = Date.now();
   };
 
-  const pick = (which: 'a' | 'b') => {
-    const ep = eps[epIdx];
-    const p = currentPart();
-    const opt: Option = p[which];
-    const nextStats = applyFx(stats, opt.fx, diff);
-    setStats(nextStats);
-    track('choice', {
-      episode: epIdx + 1, title: ep.title, part, option: which, text: opt.text,
-      ms: Date.now() - decisionStart.current, stats: nextStats,
-    });
+  const pick = (i: number) => {
+    const step = currentStep();
+    const opt = step.options[i];
+    let next = applyFx(stats, opt.fx, diff);
+    const ms = Date.now() - decisionStart.current;
     decisionStart.current = Date.now();
-    if (part === 'B') {
-      track('episode_result', { episode: epIdx + 1, title: ep.title, first: firstPick, second: which });
-      if (epIdx + 1 >= eps.length) track('run_end', { stats: nextStats, episodes: eps.length });
-    }
-    const entries: Entry[] = [
-      { kind: 'pick', text: opt.text },
-      { kind: 'note', text: opt.note },
-    ];
-    if (part === 'A') {
-      setFirstPick(which);
-      setPart('B');
-      entries.push({ kind: 'sit', text: ep.partB[which].situation });
-    } else {
-      entries.push({ kind: 'result', text: `${ep.title.toUpperCase()}: ${ep.result[firstPick]}` });
-      if (epIdx + 1 >= eps.length) {
+    const entries: Entry[] = [{ kind: 'pick', text: opt.text }, { kind: 'note', text: opt.note }];
+    const letter = LETTERS[i].toLowerCase();
+
+    if (mode === 'sit' && sit) {
+      track('choice', { mode, scenario: sit.title, episode: 1, part: String(stepIdx + 1), option: letter, text: opt.text, ms, stats: next });
+      if (stepIdx === 1 && diff === 'Hard') {
+        next = applyFx(next, sit.twist.fx, 'Medium');
+        entries.push({ kind: 'twist', text: sit.twist.text });
+      }
+      setStats(next);
+      if (stepIdx + 1 >= sit.steps.length) {
         setThread((t) => [...t, ...entries]);
+        track('run_end', { mode, scenario: sit.title, stats: next });
         setScreen('ending');
         return;
       }
-      setEpIdx(epIdx + 1);
-      setPart('A');
-      entries.push({ kind: 'sit', text: eps[epIdx + 1].partA.situation });
+      setStepIdx(stepIdx + 1);
+      entries.push({ kind: 'sit', text: sit.steps[stepIdx + 1].situation });
+    } else {
+      const ep = eps[epIdx];
+      track('choice', { mode, scenario: ep.title, episode: epIdx + 1, part, option: letter, text: opt.text, ms, stats: next });
+      setStats(next);
+      if (part === 'A') {
+        setFirstPick(i);
+        setPart('B');
+        entries.push({ kind: 'sit', text: ep.b[i].situation });
+      } else {
+        track('episode_result', { scenario: ep.title, episode: epIdx + 1, first: LETTERS[firstPick].toLowerCase(), second: letter });
+        entries.push({ kind: 'result', text: `${ep.title.toUpperCase()}: ${ep.result[firstPick]}` });
+        if (epIdx + 1 >= eps.length) {
+          setThread((t) => [...t, ...entries]);
+          track('run_end', { mode, stats: next, episodes: eps.length });
+          setScreen('ending');
+          return;
+        }
+        setEpIdx(epIdx + 1);
+        setPart('A');
+        entries.push({ kind: 'sit', text: eps[epIdx + 1].a.situation });
+      }
     }
     setThread((t) => [...t, ...entries]);
     setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 50);
@@ -161,7 +203,7 @@ export default function App() {
         <View key={k} style={styles.meterRow}>
           <Text style={[styles.small, { color: c.fg, width: 84 }]}>{STAT_LABELS[k]}</Text>
           {k === 'netWorth' ? (
-            <Text style={[styles.small, { color: c.fg }]}>{stats.netWorth < 0 ? '-' : ''}${Math.abs(stats.netWorth).toLocaleString()}</Text>
+            <Text style={[styles.small, { color: c.fg }]}>{fmtMoney(stats.netWorth)}</Text>
           ) : (
             <View style={[styles.track, { borderColor: c.fg }]}>
               <View style={{ width: `${stats[k]}%`, height: '100%', backgroundColor: c.fg }} />
@@ -197,51 +239,85 @@ export default function App() {
       </ScrollView>
     );
   } else if (screen === 'start') {
+    const picked = SITUATIONS.find((s) => s.id === sitPick);
     body = (
       <ScrollView contentContainerStyle={styles.pad}>
         <Header left="" right="settings" />
         <Text style={[styles.title, { color: c.fg }]}>LIFESTRAT</Text>
         <Text style={[styles.body, { color: c.fg }]}>a life, one choice at a time.</Text>
-        <Text style={[styles.label, { color: c.fg }]}>starting age</Text>
-        <View style={styles.row}>{AGES.map((a) => <Btn key={a} label={String(a)} on={a === age} onPress={() => setAge(a)} />)}</View>
-        <Text style={[styles.label, { color: c.fg }]}>detail</Text>
-        <View style={styles.row}>{DETAILS.map((d) => <Btn key={d} label={d} on={d === detail} onPress={() => setDetail(d)} />)}</View>
+        <Text style={[styles.label, { color: c.fg }]}>mode</Text>
+        <View style={styles.row}>
+          <Btn label="LIFE" on={mode === 'life'} onPress={() => setMode('life')} />
+          <Btn label="SITUATION" on={mode === 'sit'} onPress={() => setMode('sit')} />
+        </View>
+        {mode === 'life' ? (
+          <>
+            <Text style={[styles.label, { color: c.fg }]}>starting age</Text>
+            <View style={styles.row}>{START_AGES.map((a) => <Btn key={a} label={String(a)} on={a === age} onPress={() => setAge(a)} />)}</View>
+            <Text style={[styles.label, { color: c.fg }]}>detail</Text>
+            <View style={styles.row}>{DETAILS.map((d) => <Btn key={d} label={d} on={d === detail} onPress={() => setDetail(d)} />)}</View>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.label, { color: c.fg }]}>situation</Text>
+            <Btn label="RANDOM" on={sitPick === 'random'} onPress={() => setSitPick('random')} />
+            {SITUATIONS.map((s) => <Btn key={s.id} label={s.title} on={sitPick === s.id} onPress={() => setSitPick(s.id)} />)}
+            {picked && <Text style={[styles.small, { color: c.fg, marginTop: 4 }]}>{picked.blurb}</Text>}
+          </>
+        )}
         <Text style={[styles.label, { color: c.fg }]}>difficulty</Text>
         <View style={styles.row}>{DIFFS.map((d) => <Btn key={d} label={d} on={d === diff} onPress={() => setDiff(d)} />)}</View>
-        <View style={{ height: 28 }} />
+        <Text style={[styles.small, { color: c.fg, marginTop: 2 }]}>{DIFF_NOTE[diff]}</Text>
+        <View style={{ height: 24 }} />
         <Btn label="BEGIN" solid onPress={begin} />
         <Text style={[styles.small, styles.center, { color: c.fg, marginTop: 14 }]}>17+ · fiction, not prediction</Text>
       </ScrollView>
     );
   } else if (screen === 'play') {
-    const p = currentPart();
-    const ep = eps[epIdx];
+    const step = currentStep();
+    const sitMode = mode === 'sit' && sit;
+    const total = sitMode ? sit!.steps.length : eps.length;
+    const doneDots = sitMode ? stepIdx : epIdx;
+    const left = sitMode ? sit!.title.toUpperCase() : `AGE ${eps[epIdx].age}`;
+    const right = sitMode ? `STEP ${stepIdx + 1}/${total}` : `EP ${epIdx + 1}/${total} · PART ${part}/2`;
     body = (
       <View style={{ flex: 1 }}>
         <View style={styles.pad}>
-          <Header left={`AGE ${ep.age}`} right={`EP ${epIdx + 1}/${eps.length} · PART ${part}/2`} />
+          <Header left={left} right={right} />
           <View style={styles.dots}>
-            {eps.map((_, i) => (
-              <View key={i} style={[styles.dot, { borderColor: c.fg, backgroundColor: i < epIdx ? c.fg : c.bg }]} />
+            {Array.from({ length: total }).map((_, i) => (
+              <View key={i} style={[styles.dot, { borderColor: c.fg, backgroundColor: i < doneDots ? c.fg : c.bg }]} />
             ))}
           </View>
           <Meters />
         </View>
         <ScrollView ref={scroller} style={{ flex: 1 }} contentContainerStyle={styles.threadPad}>
           {thread.slice(0, -1).map((e, i) => (
-            <Text key={i} style={[e.kind === 'pick' ? styles.pick : e.kind === 'result' ? styles.result : styles.past, { color: c.fg, borderColor: c.fg }]}>
+            <Text
+              key={i}
+              style={[
+                e.kind === 'pick' ? styles.pick : e.kind === 'result' || e.kind === 'twist' ? styles.result : styles.past,
+                { color: c.fg, borderColor: c.fg },
+              ]}
+            >
               {e.kind === 'pick' ? `> ${e.text}` : e.text}
             </Text>
           ))}
           <Text style={[styles.sit, { color: c.fg }]}>{thread[thread.length - 1].text}</Text>
+          {sitMode && diff === 'Easy' && !!step.hint && (
+            <Text style={[styles.small, { color: c.fg, marginTop: 10, fontStyle: 'italic' }]}>hint: {step.hint}</Text>
+          )}
         </ScrollView>
-        <View style={styles.pad}>
-          <Btn label={`A. ${p.a.text}`} onPress={() => pick('a')} />
-          <Btn label={`B. ${p.b.text}`} onPress={() => pick('b')} />
+        <View style={[styles.pad, { paddingTop: 8 }]}>
+          <ScrollView style={{ maxHeight: 320 }}>
+            {step.options.map((op, i) => (
+              <Btn key={i} label={`${LETTERS[i]}. ${op.text}`} onPress={() => pick(i)} />
+            ))}
+          </ScrollView>
           <Text
             style={[styles.small, { color: c.fg, textAlign: 'right', textDecorationLine: 'underline' }]}
             onPress={() => {
-              track('report_tap', { episode: epIdx + 1, part });
+              track('report_tap', { scenario: pos.current.label, at: pos.current.part });
               Alert.alert('Report', 'Thanks. In the real app this sends the text to us for review.');
             }}
           >
@@ -251,18 +327,34 @@ export default function App() {
       </View>
     );
   } else if (screen === 'ending') {
+    const sitMode = mode === 'sit' && sit;
     const end = endingText(stats);
+    const db = sitMode ? debrief(startRef.current, stats) : null;
     body = (
       <ScrollView contentContainerStyle={styles.pad}>
-        <Header left="THE END" right="settings" />
-        <Text style={[styles.body, { color: c.fg, marginVertical: 16 }]}>{end.summary}</Text>
+        <Header left={sitMode ? 'DEBRIEF' : 'THE END'} right="settings" />
+        <Text style={[styles.body, { color: c.fg, marginVertical: 16 }]}>
+          {db ? `${sit!.title}: ${db.verdict}` : end.summary}
+        </Text>
         <View style={[styles.card, { borderColor: c.fg }]}>
           <Text style={[styles.title, { color: c.fg, fontSize: 18 }]}>LIFESTRAT</Text>
-          <Text style={[styles.small, { color: c.fg, marginBottom: 12 }]}>start {age} · {detail} · {diff}</Text>
-          <Meters />
-          <Text style={[styles.body, { color: c.fg, marginTop: 14 }]}>"{end.epitaph}"</Text>
+          <Text style={[styles.small, { color: c.fg, marginBottom: 12 }]}>
+            {sitMode ? `${sit!.title} · ${diff}` : `start ${age} · ${detail} · ${diff}`}
+          </Text>
+          {db ? (
+            db.rows.map((r) => (
+              <Text key={r.label} style={[styles.small, { color: c.fg, marginBottom: 4 }]}>
+                {r.label.padEnd(10, ' ')} {r.from} {'->'} {r.to}
+              </Text>
+            ))
+          ) : (
+            <>
+              <Meters />
+              <Text style={[styles.body, { color: c.fg, marginTop: 14 }]}>"{end.epitaph}"</Text>
+            </>
+          )}
         </View>
-        <Feedback fg={c.fg} bg={c.bg} font={FONT} ctx={{ age, detail, difficulty: diff, stats }} />
+        <Feedback fg={c.fg} bg={c.bg} font={FONT} ctx={{ mode, scenario: sitMode ? sit!.title : null, age, detail, difficulty: diff, stats }} />
         <View style={{ height: 20 }} />
         <Btn label="PLAY AGAIN" solid onPress={() => setScreen('start')} />
       </ScrollView>
@@ -330,5 +422,3 @@ const styles = StyleSheet.create({
   result: { fontFamily: FONT, fontSize: 12, lineHeight: 19, marginVertical: 14, borderWidth: 1, padding: 10 },
   card: { borderWidth: 1, padding: 16 },
 });
-
-
