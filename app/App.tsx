@@ -1,4 +1,4 @@
-﻿import { ReactElement, useEffect, useRef, useState } from 'react';
+import { ReactElement, useEffect, useRef, useState } from 'react';
 import { Alert, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -109,7 +109,7 @@ export default function App() {
     <View style={styles.meters}>
       {KEYS.map((k) => (
         <View key={k} style={styles.meterRow}>
-          <Text style={[styles.small, { color: c.fg, width: 62 }]}>{STAT_LABELS[k]}</Text>
+          <Text style={[styles.small, { color: c.fg, width: 84 }]}>{STAT_LABELS[k]}</Text>
           {k === 'netWorth' ? (
             <Text style={[styles.small, { color: c.fg }]}>${stats.netWorth.toLocaleString()}</Text>
           ) : (
@@ -145,7 +145,7 @@ export default function App() {
         <View style={styles.row}>{DIFFS.map((d) => <Btn key={d} label={d} on={d === diff} onPress={() => setDiff(d)} />)}</View>
         <View style={{ height: 28 }} />
         <Btn label="BEGIN" solid onPress={begin} />
-        <Text style={[styles.small, styles.center, { color: c.fg, marginTop: 14 }]}>17+ Â· fiction, not prediction</Text>
+        <Text style={[styles.small, styles.center, { color: c.fg, marginTop: 14 }]}>17+ · fiction, not prediction</Text>
       </ScrollView>
     );
   } else if (screen === 'play') {
@@ -154,7 +154,7 @@ export default function App() {
     body = (
       <View style={{ flex: 1 }}>
         <View style={styles.pad}>
-          <Header left={`AGE ${ep.age}`} right={`EP ${epIdx + 1}/${eps.length} Â· PART ${part}/2`} />
+          <Header left={`AGE ${ep.age}`} right={`EP ${epIdx + 1}/${eps.length} · PART ${part}/2`} />
           <View style={styles.dots}>
             {eps.map((_, i) => (
               <View key={i} style={[styles.dot, { borderColor: c.fg, backgroundColor: i < epIdx ? c.fg : c.bg }]} />
@@ -190,7 +190,7 @@ export default function App() {
         <Text style={[styles.body, { color: c.fg, marginVertical: 16 }]}>{end.summary}</Text>
         <View style={[styles.card, { borderColor: c.fg }]}>
           <Text style={[styles.title, { color: c.fg, fontSize: 18 }]}>LIFESTRAT</Text>
-          <Text style={[styles.small, { color: c.fg, marginBottom: 12 }]}>start {age} Â· {detail} Â· {diff}</Text>
+          <Text style={[styles.small, { color: c.fg, marginBottom: 12 }]}>start {age} · {detail} · {diff}</Text>
           <Meters />
           <Text style={[styles.body, { color: c.fg, marginTop: 14 }]}>"{end.epitaph}"</Text>
         </View>
@@ -230,7 +230,7 @@ export default function App() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
       <StatusBar style={dark ? 'light' : 'dark'} />
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, width: '100%', maxWidth: 480, alignSelf: 'center' }}>
         {body}
       </View>
     </SafeAreaView>
@@ -260,4 +260,5 @@ const styles = StyleSheet.create({
   result: { fontFamily: FONT, fontSize: 12, lineHeight: 19, marginVertical: 14, borderWidth: 1, padding: 10 },
   card: { borderWidth: 1, padding: 16 },
 });
+
 
